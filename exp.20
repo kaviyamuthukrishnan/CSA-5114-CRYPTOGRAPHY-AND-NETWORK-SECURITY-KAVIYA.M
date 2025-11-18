@@ -1,0 +1,99 @@
+from Crypto.Cipher import AES
+from Crypto.Random import get_random_bytes
+
+# pad to block size (AES = 16 bytes)
+def pad(data):
+    pad_len = 16 - (len(data) % 16)
+    return data + bytes([pad_len]) * pad_len
+
+def unpad(data):
+    return data[:-data[-1]]
+
+# flip a single bit in a block
+def flip_bit(block, bit_index=0):
+    block = bytearray(block)
+    block[bit_index] ^= 0x01   # flip LSB
+    return bytes(block)
+
+# AES ECB encrypt/decrypt
+def aes_ecb_encrypt(msg, key):
+    cipher = AES.new(key, AES.MODE_ECB)
+    return cipher.encrypt(pad(msg))
+
+def aes_ecb_decrypt(ct, key):
+    cipher = AES.new(key, AES.MODE_ECB)
+    return unpad(cipher.decrypt(ct))
+
+# AES CBC encrypt/decrypt
+def aes_cbc_encrypt(msg, key, iv):
+    cipher = AES.new(key, AES.MODE_CBC, iv)
+    return iv + cipher.encrypt(pad(msg))
+
+def aes_cbc_decrypt(ct, key):
+    iv = ct[:16]
+    cipher = AES.new(key, AES.MODE_CBC, iv)
+    return unpad(cipher.decrypt(ct[16:]))
+
+# MAIN DEMO
+if __name__ == "__main__":
+    key = get_random_bytes(16)
+    iv  = get_random_bytes(16)
+
+    # message of 3 blocks
+    plaintext = b"AAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBCCCCCCCCCCCCCCCC"
+    print("Original plaintext:", plaintext)
+
+    # =========================
+    # ECB — ciphertext error
+    # =========================
+    ecb_ct = aes_ecb_encrypt(plaintext, key)
+
+    # corrupt block 1
+    corrupted_block1 = flip_bit(ecb_ct[16:32])
+    corrupted_ecb = ecb_ct[:16] + corrupted_block1 + ecb_ct[32:]
+
+    decrypted_ecb = aes_ecb_decrypt(corrupted_ecb, key)
+
+    print("\n[ECB] Decrypted after error:", decrypted_ecb)
+    print("ECB observation: ONLY the corrupted block is affected.")
+
+    # =========================
+    # CBC — ciphertext error
+    # =========================
+    cbc_ct = aes_cbc_encrypt(plaintext, key, iv)
+
+    # corrupt C1
+    C0 = cbc_ct[:16]
+    C1 = cbc_ct[16:32]
+    corrupted_C1 = flip_bit(C1)
+
+    corrupted_cbc = C0 + corrupted_C1 + cbc_ct[32:]
+
+    try:
+        decrypted_cbc = aes_cbc_decrypt(corrupted_cbc, key)
+        print("\n[CBC] Decrypted after C1 error:", decrypted_cbc)
+    except:
+        print("[CBC] Padding error (expected due to corruption)")
+
+    print("CBC observation: Corrupt C1 → P1 and P2 are affected.")
+
+
+    # =========================
+    # CBC — plaintext error propagation
+    # =========================
+    # corrupt P1 before encryption
+    corrupted_plaintext = b"X" + plaintext[1:]   # 1-byte error in P1
+
+    cbc_ct_original = aes_cbc_encrypt(plaintext, key, iv)
+    cbc_ct_modified = aes_cbc_encrypt(corrupted_plaintext, key, iv)
+
+    print("\nComparison of ciphertext blocks:")
+    for i in range(0, len(cbc_ct_original), 16):
+        block_original = cbc_ct_original[i:i+16].hex()
+        block_modified = cbc_ct_modified[i:i+16].hex()
+        print(f"Block {i//16}:")
+        print(" Original:", block_original)
+        print(" Modified:", block_modified)
+        print()
+
+    print("Observation: P1 error changes C1 and C2, but NOT blocks after C2.")
